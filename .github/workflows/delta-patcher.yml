@@ -2,8 +2,8 @@
 name: Bun Delta Patcher
 on:
   schedule:
-    - cron: '0 0 * * *' # Jalan setiap tengah malam
-  workflow_dispatch: # Bisa di-trigger manual
+    - cron: '0 0 * * *' # Jalan setiap tengah malam UTC
+  workflow_dispatch: # Trigger manual
 
 jobs:
   build-patch:
@@ -12,24 +12,30 @@ jobs:
       contents: write
     steps:
       - name: Install xdelta3 & jq
-        run: sudo apt-get update && sudo apt-get install -y xdelta3 jq curl
+        run: sudo apt-get update && sudo apt-get install -y xdelta3 jq curl unzip
 
-      - name: Check Latest Upstream Release
+      - name: Check Latest Upstream Release (oven-sh/bun)
         id: upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LATEST=$(curl -s https://api.github.com/repos/oven-sh/bun/releases/latest | jq -r .tag_name)
+          # Pakai GitHub Token biar ga kena rate limit API
+          LATEST=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/oven-sh/bun/releases/latest | jq -r .tag_name)
+          echo "Upstream Latest: $LATEST"
           echo "tag=$LATEST" >> $GITHUB_OUTPUT
 
       - name: Check Latest Local Release
         id: local
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Ambil tag terakhir dari repo kita sendiri (Abaikan error kalau repo baru dan kosong)
-          LOCAL=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name || echo "none")
-          if [ "$LOCAL" == "null" ]; then LOCAL="none"; fi
+          LOCAL=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name || echo "none")
+          if [ "$LOCAL" == "null" ] || [ -z "$LOCAL" ]; then LOCAL="none"; fi
+          echo "Local Latest: $LOCAL"
           echo "tag=$LOCAL" >> $GITHUB_OUTPUT
 
       - name: Generate Patch & Release
-        if: steps.upstream.outputs.tag != steps.local.outputs.tag && steps.local.outputs.tag != 'none'
+        if: steps.upstream.outputs.tag != steps.local.outputs.tag && steps.local.outputs.tag != 'none' && steps.upstream.outputs.tag != 'null'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OLD_VER: ${{ steps.local.outputs.tag }}
@@ -37,8 +43,8 @@ jobs:
         run: |
           echo "Updating from $OLD_VER to $NEW_VER"
           
-          # Target OS/Arch (Bisa kamu tambah untuk aarch64 jika butuh)
-          TARGETS=("linux-x64" "linux-aarch64")
+          # Target OS/Arch
+          TARGETS=("windows-x64") # Fokus ke Windows-x64 karena kamu pakai Windows
           
           mkdir -p patches
           
@@ -55,7 +61,8 @@ jobs:
             
             # Generate Delta Patch (Level 9 Compression)
             PATCH_NAME="bun-$TARGET-$OLD_VER-to-$NEW_VER.patch"
-            xdelta3 -e -S djw -9 old_dir/bun-$TARGET/bun new_dir/bun-$TARGET/bun patches/$PATCH_NAME
+            # Perintah xdelta3 untuk bikin patch: -e (encode), -S djw (secondary compression), -9 (max)
+            xdelta3 -e -S djw -9 old_dir/bun-$TARGET/bun.exe new_dir/bun-$TARGET/bun.exe patches/$PATCH_NAME
             
             # Cleanup
             rm -rf old.zip new.zip old_dir new_dir
