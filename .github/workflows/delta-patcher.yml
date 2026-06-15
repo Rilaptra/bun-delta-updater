@@ -1,0 +1,65 @@
+# file: .github/workflows/delta-patcher.yml
+name: Bun Delta Patcher
+on:
+  schedule:
+    - cron: '0 0 * * *' # Jalan setiap tengah malam
+  workflow_dispatch: # Bisa di-trigger manual
+
+jobs:
+  build-patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install xdelta3 & jq
+        run: sudo apt-get update && sudo apt-get install -y xdelta3 jq curl
+
+      - name: Check Latest Upstream Release
+        id: upstream
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/oven-sh/bun/releases/latest | jq -r .tag_name)
+          echo "tag=$LATEST" >> $GITHUB_OUTPUT
+
+      - name: Check Latest Local Release
+        id: local
+        run: |
+          # Ambil tag terakhir dari repo kita sendiri (Abaikan error kalau repo baru dan kosong)
+          LOCAL=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name || echo "none")
+          if [ "$LOCAL" == "null" ]; then LOCAL="none"; fi
+          echo "tag=$LOCAL" >> $GITHUB_OUTPUT
+
+      - name: Generate Patch & Release
+        if: steps.upstream.outputs.tag != steps.local.outputs.tag && steps.local.outputs.tag != 'none'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLD_VER: ${{ steps.local.outputs.tag }}
+          NEW_VER: ${{ steps.upstream.outputs.tag }}
+        run: |
+          echo "Updating from $OLD_VER to $NEW_VER"
+          
+          # Target OS/Arch (Bisa kamu tambah untuk aarch64 jika butuh)
+          TARGETS=("linux-x64" "linux-aarch64")
+          
+          mkdir -p patches
+          
+          for TARGET in "${TARGETS[@]}"; do
+            echo "Processing $TARGET..."
+            
+            # Download Old
+            curl -sL "https://github.com/oven-sh/bun/releases/download/$OLD_VER/bun-$TARGET.zip" -o old.zip
+            unzip -q old.zip -d old_dir
+            
+            # Download New
+            curl -sL "https://github.com/oven-sh/bun/releases/download/$NEW_VER/bun-$TARGET.zip" -o new.zip
+            unzip -q new.zip -d new_dir
+            
+            # Generate Delta Patch (Level 9 Compression)
+            PATCH_NAME="bun-$TARGET-$OLD_VER-to-$NEW_VER.patch"
+            xdelta3 -e -S djw -9 old_dir/bun-$TARGET/bun new_dir/bun-$TARGET/bun patches/$PATCH_NAME
+            
+            # Cleanup
+            rm -rf old.zip new.zip old_dir new_dir
+          done
+
+          # Create GitHub Release & Upload Patches
+          gh release create "$NEW_VER" ./patches/* --repo ${{ github.repository }} --title "Bun $NEW_VER Patches" --notes "Delta patches from $OLD_VER to $NEW_VER"
