@@ -2,8 +2,8 @@
 name: Bun Delta Patcher
 on:
   schedule:
-    - cron: '0 0 * * *' # Jalan setiap tengah malam UTC
-  workflow_dispatch: # Trigger manual
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   build-patch:
@@ -19,7 +19,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Pakai GitHub Token biar ga kena rate limit API
           LATEST=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/oven-sh/bun/releases/latest | jq -r .tag_name)
           echo "Upstream Latest: $LATEST"
           echo "tag=$LATEST" >> $GITHUB_OUTPUT
@@ -44,7 +43,7 @@ jobs:
           echo "Updating from $OLD_VER to $NEW_VER"
           
           # Target OS/Arch
-          TARGETS=("windows-x64") # Fokus ke Windows-x64 karena kamu pakai Windows
+          TARGETS=("windows-x64")
           
           mkdir -p patches
           
@@ -61,8 +60,9 @@ jobs:
             
             # Generate Delta Patch (Level 9 Compression)
             PATCH_NAME="bun-$TARGET-$OLD_VER-to-$NEW_VER.patch"
-            # Perintah xdelta3 untuk bikin patch: -e (encode), -S djw (secondary compression), -9 (max)
-            xdelta3 -e -S djw -9 old_dir/bun-$TARGET/bun.exe new_dir/bun-$TARGET/bun.exe patches/$PATCH_NAME
+            
+            # 🔥 FIX: Tambahkan flag -s sebelum file lama
+            xdelta3 -e -S djw -9 -s old_dir/bun-$TARGET/bun.exe new_dir/bun-$TARGET/bun.exe patches/$PATCH_NAME
             
             # Cleanup
             rm -rf old.zip new.zip old_dir new_dir
